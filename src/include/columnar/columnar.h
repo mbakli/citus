@@ -220,6 +220,10 @@ typedef struct TableReadState
 	TupleDesc tupleDescriptor;
 	Relation relation;
 
+	/* following are used for tables with zero columns */
+	uint64 totalRowCount;
+	uint64 readRowCount;
+
 	/*
 	 * List of Var pointers for columns in the query. We use this both for
 	 * getting vector of projected columns, and also when we want to build
