@@ -203,6 +203,8 @@ struct CopyShardState
 
 	/* List of CopyPlacementStates for all active placements of the shard. */
 	List *placementStateList;
+
+	FileCompat fileDest;
 };
 
 /* ShardConnections represents a set of connections for each placement of a shard */
@@ -271,7 +273,7 @@ static CopyConnectionState * GetConnectionState(HTAB *connectionStateHash,
 static CopyShardState * GetShardState(uint64 shardId, HTAB *shardStateHash,
 									  HTAB *connectionStateHash, bool stopOnFailure,
 									  bool *found, bool shouldUseLocalCopy, CopyOutState
-									  copyOutState, bool isCopyToIntermediateFile);
+									  copyOutState);
 static MultiConnection * CopyGetPlacementConnection(HTAB *connectionStateHash,
 													ShardPlacement *placement,
 													bool stopOnFailure);
@@ -285,8 +287,7 @@ static void InitializeCopyShardState(CopyShardState *shardState,
 									 HTAB *connectionStateHash,
 									 uint64 shardId, bool stopOnFailure, bool
 									 canUseLocalCopy,
-									 CopyOutState copyOutState,
-									 bool isCopyToIntermediateFile);
+									 CopyOutState copyOutState);
 static void StartPlacementStateCopyCommand(CopyPlacementState *placementState,
 										   CopyStmt *copyStatement,
 										   CopyOutState copyOutState);
@@ -335,9 +336,10 @@ static bool ContainsLocalPlacement(int64 shardId);
 static void CompleteCopyQueryTagCompat(QueryCompletionCompat *completionTag, uint64
 									   processedRowCount);
 static void FinishLocalCopy(CitusCopyDestReceiver *copyDest);
+static void StartLocalFile(CitusCopyDestReceiver *copyDest, CopyShardState *shardState);
+static void FinishLocalFile(CitusCopyDestReceiver *copyDest);
 static void CloneCopyOutStateForLocalCopy(CopyOutState from, CopyOutState to);
-static LocalCopyStatus GetLocalCopyStatus(List *shardIntervalList, bool
-										  isIntermediateResult);
+static LocalCopyStatus GetLocalCopyStatus(List *shardIntervalList);
 static bool ShardIntervalListHasLocalPlacements(List *shardIntervalList);
 static void LogLocalCopyExecution(uint64 shardId);
 
@@ -2097,20 +2099,11 @@ CreateCitusCopyDestReceiver(Oid tableId, List *columnNameList, int partitionColu
  * execution depending on other information.
  */
 static LocalCopyStatus
-GetLocalCopyStatus(List *shardIntervalList, bool isIntermediateResult)
+GetLocalCopyStatus(List *shardIntervalList)
 {
 	if (!EnableLocalExecution ||
 		GetCurrentLocalExecutionStatus() == LOCAL_EXECUTION_DISABLED)
 	{
-		return LOCAL_COPY_DISABLED;
-	}
-	else if (isIntermediateResult)
-	{
-		/*
-		 * Intermediate files are written to a file, and files are visible to all
-		 * transactions, and we use a custom copy format for copy therefore we will
-		 * use the existing logic for that.
-		 */
 		return LOCAL_COPY_DISABLED;
 	}
 	else if (GetCurrentLocalExecutionStatus() == LOCAL_EXECUTION_REQUIRED)
@@ -2342,9 +2335,8 @@ CitusCopyDestReceiverStartup(DestReceiver *dest, int operation,
 	 */
 	EnsureConnectionPossibilityForRemotePrimaryNodes();
 
-	bool isIntermediateResult = copyDest->intermediateResultIdPrefix != NULL;
 	LocalCopyStatus localCopyStatus =
-		GetLocalCopyStatus(shardIntervalList, isIntermediateResult);
+		GetLocalCopyStatus(shardIntervalList);
 	if (localCopyStatus == LOCAL_COPY_DISABLED)
 	{
 		copyDest->shouldUseLocalCopy = false;
@@ -2410,6 +2402,8 @@ CitusCopyDestReceiverReceive(TupleTableSlot *slot, DestReceiver *dest)
 }
 
 
+#include "distributed/transmit.h"
+
 /*
  * CitusSendTupleToPlacements sends the given TupleTableSlot to the appropriate
  * shard placement(s).
@@ -2444,14 +2438,12 @@ CitusSendTupleToPlacements(TupleTableSlot *slot, CitusCopyDestReceiver *copyDest
 	/* connections hash is kept in memory context */
 	MemoryContextSwitchTo(copyDest->memoryContext);
 
-	bool isIntermediateResult = copyDest->intermediateResultIdPrefix != NULL;
 	CopyShardState *shardState = GetShardState(shardId, copyDest->shardStateHash,
 											   copyDest->connectionStateHash,
 											   stopOnFailure,
 											   &cachedShardStateFound,
 											   copyDest->shouldUseLocalCopy,
-											   copyDest->copyOutState,
-											   isIntermediateResult);
+											   copyDest->copyOutState);
 	if (!cachedShardStateFound)
 	{
 		firstTupleInShard = true;
@@ -2472,7 +2464,20 @@ CitusSendTupleToPlacements(TupleTableSlot *slot, CitusCopyDestReceiver *copyDest
 		}
 	}
 
-	if (copyDest->shouldUseLocalCopy && shardState->containsLocalPlacement)
+	bool isIntermediateResult = copyDest->intermediateResultIdPrefix != NULL;
+	if (isIntermediateResult && copyDest->shouldUseLocalCopy)
+	{
+		if (firstTupleInShard)
+		{
+			StartLocalFile(copyDest, shardState);
+		}
+
+		resetStringInfo(copyOutState->fe_msgbuf);
+		AddSlotToBuffer(slot, copyDest, copyOutState);
+		WriteToLocalFile(copyOutState->fe_msgbuf, &shardState->fileDest);
+		resetStringInfo(copyOutState->fe_msgbuf);
+	}
+	else if (copyDest->shouldUseLocalCopy && shardState->containsLocalPlacement)
 	{
 		WriteTupleToLocalShard(slot, copyDest, shardId, shardState->copyOutState);
 	}
@@ -2694,6 +2699,7 @@ CitusCopyDestReceiverShutdown(DestReceiver *destReceiver)
 
 	List *connectionStateList = ConnectionStateList(connectionStateHash);
 	FinishLocalCopy(copyDest);
+	FinishLocalFile(copyDest);
 
 	PG_TRY();
 	{
@@ -2738,6 +2744,69 @@ FinishLocalCopy(CitusCopyDestReceiver *copyDest)
 		{
 			FinishLocalCopyToShard(copyDest, copyShardState->shardId,
 								   copyShardState->copyOutState);
+		}
+	}
+}
+
+
+static void
+StartLocalFile(CitusCopyDestReceiver *copyDest, CopyShardState *shardState)
+{
+	CopyOutState copyOutState = copyDest->copyOutState;
+
+	const int fileFlags = (O_APPEND | O_CREAT | O_RDWR | O_TRUNC | PG_BINARY);
+	const int fileMode = (S_IRUSR | S_IWUSR);
+
+	/* make sure the directory exists */
+	CreateIntermediateResultsDirectory();
+
+	StringInfo s = makeStringInfo();
+	appendStringInfo(s, "%s_%ld", copyDest->intermediateResultIdPrefix,
+					 shardState->shardId);
+
+	const char *fileName = QueryResultFileName(s->data);
+	shardState->fileDest =
+		FileCompatFromFileStart(FileOpenForTransmit(fileName, fileFlags, fileMode));
+
+	bool isBinaryCopy = copyOutState->binary;
+	if (isBinaryCopy)
+	{
+		resetStringInfo(copyOutState->fe_msgbuf);
+		AppendCopyBinaryHeaders(copyOutState);
+		WriteToLocalFile(copyOutState->fe_msgbuf, &shardState->fileDest);
+		resetStringInfo(copyOutState->fe_msgbuf);
+	}
+}
+
+
+static void
+FinishLocalFile(CitusCopyDestReceiver *copyDest)
+{
+	HTAB *shardStateHash = copyDest->shardStateHash;
+	HASH_SEQ_STATUS status;
+	CopyShardState *copyShardState;
+
+	foreach_htab(copyShardState, &status, shardStateHash)
+	{
+		if (copyShardState->copyOutState != NULL &&
+			copyShardState->copyOutState->fe_msgbuf->len > 0 &&
+			copyShardState->fileDest.fd > 0)
+		{
+			bool isBinaryCopy = copyShardState->copyOutState->binary;
+
+			if (isBinaryCopy)
+			{
+				/*
+				 * We're going to flush the buffer to disk by effectively doing a full
+				 * COPY command. Hence we also need to add footers to the current buffer.
+				 */
+				resetStringInfo(copyShardState->copyOutState->fe_msgbuf);
+				AppendCopyBinaryFooters(copyShardState->copyOutState);
+				WriteToLocalFile(copyShardState->copyOutState->fe_msgbuf,
+								 &copyShardState->fileDest);
+				resetStringInfo(copyShardState->copyOutState->fe_msgbuf);
+			}
+			FileClose(copyShardState->fileDest.fd);
 		}
 	}
 }
@@ -3438,8 +3507,7 @@ ConnectionStateListToNode(HTAB *connectionStateHash, const char *hostname, int32
 static CopyShardState *
 GetShardState(uint64 shardId, HTAB *shardStateHash,
 			  HTAB *connectionStateHash, bool stopOnFailure, bool *found, bool
-			  shouldUseLocalCopy, CopyOutState copyOutState, bool
-			  isCopyToIntermediateFile)
+			  shouldUseLocalCopy, CopyOutState copyOutState)
 {
 	CopyShardState *shardState = (CopyShardState *) hash_search(shardStateHash, &shardId,
 																HASH_ENTER, found);
@@ -3447,7 +3515,7 @@ GetShardState(uint64 shardId, HTAB *shardStateHash,
 	{
 		InitializeCopyShardState(shardState, connectionStateHash,
 								 shardId, stopOnFailure, shouldUseLocalCopy,
-								 copyOutState, isCopyToIntermediateFile);
+								 copyOutState);
 	}
 
 	return shardState;
@@ -3463,7 +3531,7 @@ static void
 InitializeCopyShardState(CopyShardState *shardState,
 						 HTAB *connectionStateHash, uint64 shardId,
 						 bool stopOnFailure, bool shouldUseLocalCopy, CopyOutState
-						 copyOutState, bool isCopyToIntermediateFile)
+						 copyOutState)
 {
 	ListCell *placementCell = NULL;
 	int failedPlacementCount = 0;
@@ -3499,20 +3567,6 @@ InitializeCopyShardState(CopyShardState *shardState,
 			CloneCopyOutStateForLocalCopy(copyOutState, shardState->copyOutState);
 			LogLocalCopyExecution(shardId);
 			continue;
-		}
-
-
-		if (placement->groupId == GetLocalGroupId())
-		{
-			/*
-			 * if we are copying into an intermediate file we won't use local copy.
-			 * Files are visible to all transactions so we can still use local execution, therefore
-			 * we shouldn't restrict only using connection in this case.
-			 */
-			if (!isCopyToIntermediateFile)
-			{
-				SetLocalExecutionStatus(LOCAL_EXECUTION_DISABLED);
-			}
 		}
 
 		MultiConnection *connection =

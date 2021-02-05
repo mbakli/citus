@@ -15,5 +15,8 @@ extern void WriteTupleToLocalShard(TupleTableSlot *slot, CitusCopyDestReceiver *
 								   CopyOutState localCopyOutState);
 extern void FinishLocalCopyToShard(CitusCopyDestReceiver *copyDest, int64 shardId,
 								   CopyOutState localCopyOutState);
+extern bool ShouldAddBinaryHeaders(StringInfo buffer, bool isBinary);
+extern void AddSlotToBuffer(TupleTableSlot *slot, CitusCopyDestReceiver *copyDest,
+							CopyOutState localCopyOutState);
 
 #endif /* LOCAL_MULTI_COPY */

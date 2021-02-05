@@ -37,13 +37,10 @@
 #include "distributed/version_compat.h"
 
 static int ReadFromLocalBufferCallback(void *outBuf, int minRead, int maxRead);
-static void AddSlotToBuffer(TupleTableSlot *slot, CitusCopyDestReceiver *copyDest,
-							CopyOutState localCopyOutState);
 
 static bool ShouldSendCopyNow(StringInfo buffer);
 static void DoLocalCopy(StringInfo buffer, Oid relationId, int64 shardId,
 						CopyStmt *copyStatement, bool isEndOfCopy);
-static bool ShouldAddBinaryHeaders(StringInfo buffer, bool isBinary);
 
 /*
  * LocalCopyBuffer is used in copy callback to return the copied rows.
@@ -116,7 +113,7 @@ FinishLocalCopyToShard(CitusCopyDestReceiver *copyDest, int64 shardId,
  * AddSlotToBuffer serializes the given slot and adds it to
  * the buffer in localCopyOutState.
  */
-static void
+void
 AddSlotToBuffer(TupleTableSlot *slot, CitusCopyDestReceiver *copyDest, CopyOutState
 				localCopyOutState)
 {
@@ -182,7 +179,7 @@ DoLocalCopy(StringInfo buffer, Oid relationId, int64 shardId, CopyStmt *copyStat
  * ShouldAddBinaryHeaders returns true if the given buffer
  * is empty and the format is binary.
  */
-static bool
+bool
 ShouldAddBinaryHeaders(StringInfo buffer, bool isBinary)
 {
 	if (!isBinary)
