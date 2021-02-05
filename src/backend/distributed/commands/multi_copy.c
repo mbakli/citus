@@ -2789,7 +2789,6 @@ FinishLocalFile(CitusCopyDestReceiver *copyDest)
 	foreach_htab(copyShardState, &status, shardStateHash)
 	{
 		if (copyShardState->copyOutState != NULL &&
-			copyShardState->copyOutState->fe_msgbuf->len > 0 &&
 			copyShardState->fileDest.fd > 0)
 		{
 			bool isBinaryCopy = copyShardState->copyOutState->binary;
@@ -3555,7 +3554,7 @@ InitializeCopyShardState(CopyShardState *shardState,
 	shardState->placementStateList = NIL;
 	shardState->copyOutState = NULL;
 	shardState->containsLocalPlacement = ContainsLocalPlacement(shardId);
-
+	shardState->fileDest.fd = 0;
 
 	foreach(placementCell, activePlacementList)
 	{
