@@ -252,6 +252,8 @@ typedef struct TableWriteState
 	ColumnarOptions options;
 	ChunkData *chunkData;
 
+	List *chunkGroupRowCounts;
+
 	/*
 	 * compressionBuffer buffer is used as temporary storage during
 	 * data value compression operation. It is kept here to minimize
@@ -325,6 +327,8 @@ extern StripeMetadata ReserveStripe(Relation rel, uint64 size,
 extern void SaveStripeSkipList(RelFileNode relfilenode, uint64 stripe,
 							   StripeSkipList *stripeSkipList,
 							   TupleDesc tupleDescriptor);
+extern void SaveChunkGroups(RelFileNode relfilenode, uint64 stripe,
+							List *chunkGroupRowCounts);
 extern StripeSkipList * ReadStripeSkipList(RelFileNode relfilenode, uint64 stripe,
 										   TupleDesc tupleDescriptor,
 										   uint32 chunkCount);

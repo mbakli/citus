@@ -514,10 +514,14 @@ FlushStripe(TableWriteState *writeState)
 		}
 	}
 
-	/* create skip list and footer buffers */
+	SaveChunkGroups(writeState->relfilenode,
+					stripeMetadata.id,
+					writeState->chunkGroupRowCounts);
 	SaveStripeSkipList(writeState->relfilenode,
 					   stripeMetadata.id,
 					   stripeSkipList, tupleDescriptor);
+
+	writeState->chunkGroupRowCounts = NIL;
 
 	relation_close(relation, NoLock);
 }
@@ -605,6 +609,9 @@ SerializeChunkData(TableWriteState *writeState, uint32 chunkIndex, uint32 rowCou
 	int compressionLevel = writeState->options.compressionLevel;
 	const uint32 columnCount = stripeBuffers->columnCount;
 	StringInfo compressionBuffer = writeState->compressionBuffer;
+
+	writeState->chunkGroupRowCounts =
+		lappend_int(writeState->chunkGroupRowCounts, rowCount);
 
 	/* serialize exist values, data values are already serialized */
 	for (columnIndex = 0; columnIndex < columnCount; columnIndex++)
