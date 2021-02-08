@@ -839,6 +839,26 @@ WITH cte_1 AS
 (INSERT INTO non_binary_copy_test SELECT * FROM non_binary_copy_test LIMIT 10000 ON CONFLICT (key) DO UPDATE SET value = (0, 'citus0')::new_type RETURNING value)
 SELECT count(*) FROM cte_1;
 
+-- test with NULL columns
+ALTER TABLE non_binary_copy_test ADD COLUMN z INT;
+WITH cte_1 AS
+(INSERT INTO non_binary_copy_test SELECT * FROM non_binary_copy_test LIMIT 10000 ON CONFLICT (key) DO UPDATE SET value = (0, 'citus0')::new_type RETURNING z)
+SELECT bool_and(z is null) FROM cte_1;
+
+-- test with type coersion (int -> text) and also NULL values with coersion
+WITH cte_1 AS
+(INSERT INTO non_binary_copy_test SELECT * FROM non_binary_copy_test LIMIT 10000 ON CONFLICT (key) DO UPDATE SET value = (0, 'citus0')::new_type RETURNING key, z)
+SELECT count(DISTINCT key::text), count(DISTINCT z::text) FROM cte_1;
+
+-- also, this might add some perf penalty, but we want to test
+-- what happens when we pass LOCAL_COPY_FLUSH_THRESHOLD
+TRUNCATE another_schema_table;
+INSERT INTO another_schema_table(a) SELECT i from generate_Series(0,2000000)i;
+WITH cte_1 AS
+(INSERT INTO another_schema_table SELECT * FROM another_schema_table ORDER BY a LIMIT 10000000 ON CONFLICT(a) DO NOTHING RETURNING *)
+SELECT count(*) FROM cte_1;
+
+
 -- if the local execution is disabled, we cannot failover to
 -- local execution and the queries would fail
 SET citus.enable_local_execution TO  false;
