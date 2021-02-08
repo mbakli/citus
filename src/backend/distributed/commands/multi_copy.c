@@ -2468,7 +2468,8 @@ CitusSendTupleToPlacements(TupleTableSlot *slot, CitusCopyDestReceiver *copyDest
 	}
 
 	bool isIntermediateResult = copyDest->colocatedIntermediateResultIdPrefix != NULL;
-	if (isIntermediateResult && copyDest->shouldUseLocalCopy)
+	if (isIntermediateResult && copyDest->shouldUseLocalCopy &&
+		shardState->containsLocalPlacement)
 	{
 		if (firstTupleInShard)
 		{
