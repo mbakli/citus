@@ -854,7 +854,7 @@ ReadIntermediateResultsIntoFuncOutput(FunctionCallInfo fcinfo, char *copyFormat,
 							  errmsg("Query could not find the intermediate result file "
 									 "\"%s\", it was mostly likely deleted due to an "
 									 "error in a parallel process within the same "
-									 "distributed transaction", resultFileName)));
+									 "distributed transaction", resultId)));
 		}
 		else
 		{
