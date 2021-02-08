@@ -336,8 +336,9 @@ static bool ContainsLocalPlacement(int64 shardId);
 static void CompleteCopyQueryTagCompat(QueryCompletionCompat *completionTag, uint64
 									   processedRowCount);
 static void FinishLocalCopy(CitusCopyDestReceiver *copyDest);
-static void StartLocalFile(CitusCopyDestReceiver *copyDest, CopyShardState *shardState);
-static void FinishLocalFile(CitusCopyDestReceiver *copyDest);
+static void StartLocalColocatedIntermediateFile(CitusCopyDestReceiver *copyDest,
+												CopyShardState *shardState);
+static void FinishLocalColocatedIntermediateFile(CitusCopyDestReceiver *copyDest);
 static void CloneCopyOutStateForLocalCopy(CopyOutState from, CopyOutState to);
 static LocalCopyStatus GetLocalCopyStatus(List *shardIntervalList);
 static bool ShardIntervalListHasLocalPlacements(List *shardIntervalList);
@@ -2085,7 +2086,7 @@ CreateCitusCopyDestReceiver(Oid tableId, List *columnNameList, int partitionColu
 	copyDest->partitionColumnIndex = partitionColumnIndex;
 	copyDest->executorState = executorState;
 	copyDest->stopOnFailure = stopOnFailure;
-	copyDest->intermediateResultIdPrefix = intermediateResultIdPrefix;
+	copyDest->colocatedIntermediateResultIdPrefix = intermediateResultIdPrefix;
 	copyDest->memoryContext = CurrentMemoryContext;
 
 	return copyDest;
@@ -2284,9 +2285,11 @@ CitusCopyDestReceiverStartup(DestReceiver *dest, int operation,
 	/* define the template for the COPY statement that is sent to workers */
 	CopyStmt *copyStatement = makeNode(CopyStmt);
 
-	if (copyDest->intermediateResultIdPrefix != NULL)
+	if (copyDest->colocatedIntermediateResultIdPrefix != NULL)
 	{
-		copyStatement->relation = makeRangeVar(NULL, copyDest->intermediateResultIdPrefix,
+		copyStatement->relation = makeRangeVar(NULL,
+											   copyDest->
+											   colocatedIntermediateResultIdPrefix,
 											   -1);
 
 		DefElem *formatResultOption = makeDefElem("format", (Node *) makeString("result"),
@@ -2464,24 +2467,21 @@ CitusSendTupleToPlacements(TupleTableSlot *slot, CitusCopyDestReceiver *copyDest
 		}
 	}
 
-	bool isIntermediateResult = copyDest->intermediateResultIdPrefix != NULL;
+	bool isIntermediateResult = copyDest->colocatedIntermediateResultIdPrefix != NULL;
 	if (isIntermediateResult && copyDest->shouldUseLocalCopy)
 	{
 		if (firstTupleInShard)
 		{
-			StartLocalFile(copyDest, shardState);
+			StartLocalColocatedIntermediateFile(copyDest, shardState);
 		}
 
-		resetStringInfo(copyOutState->fe_msgbuf);
-		AddSlotToBuffer(slot, copyDest, copyOutState);
-		WriteToLocalFile(copyOutState->fe_msgbuf, &shardState->fileDest);
-		resetStringInfo(copyOutState->fe_msgbuf);
+		WriteTupleToLocalFile(slot, copyDest, shardId,
+							  shardState->copyOutState, &shardState->fileDest);
 	}
 	else if (copyDest->shouldUseLocalCopy && shardState->containsLocalPlacement)
 	{
 		WriteTupleToLocalShard(slot, copyDest, shardId, shardState->copyOutState);
 	}
-
 
 	foreach(placementStateCell, shardState->placementStateList)
 	{
@@ -2698,8 +2698,9 @@ CitusCopyDestReceiverShutdown(DestReceiver *destReceiver)
 	Relation distributedRelation = copyDest->distributedRelation;
 
 	List *connectionStateList = ConnectionStateList(connectionStateHash);
+
+	FinishLocalColocatedIntermediateFile(copyDest);
 	FinishLocalCopy(copyDest);
-	FinishLocalFile(copyDest);
 
 	PG_TRY();
 	{
@@ -2750,37 +2751,34 @@ FinishLocalCopy(CitusCopyDestReceiver *copyDest)
 
 
 static void
-StartLocalFile(CitusCopyDestReceiver *copyDest, CopyShardState *shardState)
+StartLocalColocatedIntermediateFile(CitusCopyDestReceiver *copyDest,
+									CopyShardState *shardState)
 {
-	CopyOutState copyOutState = copyDest->copyOutState;
+	/* make sure the directory exists */
+	CreateIntermediateResultsDirectory();
 
 	const int fileFlags = (O_APPEND | O_CREAT | O_RDWR | O_TRUNC | PG_BINARY);
 	const int fileMode = (S_IRUSR | S_IWUSR);
 
-	/* make sure the directory exists */
-	CreateIntermediateResultsDirectory();
-
-	StringInfo s = makeStringInfo();
-	appendStringInfo(s, "%s_%ld", copyDest->intermediateResultIdPrefix,
+	StringInfo filePath = makeStringInfo();
+	appendStringInfo(filePath, "%s_%ld", copyDest->colocatedIntermediateResultIdPrefix,
 					 shardState->shardId);
 
-	const char *fileName = QueryResultFileName(s->data);
+	const char *fileName = QueryResultFileName(filePath->data);
 	shardState->fileDest =
 		FileCompatFromFileStart(FileOpenForTransmit(fileName, fileFlags, fileMode));
 
-	bool isBinaryCopy = copyOutState->binary;
-	if (isBinaryCopy)
+	CopyOutState localFileCopyOutState = shardState->copyOutState;
+	bool isBinaryCopy = localFileCopyOutState->binary;
+	if (ShouldAddBinaryHeaders(localFileCopyOutState->fe_msgbuf, isBinaryCopy))
 	{
-		resetStringInfo(copyOutState->fe_msgbuf);
-		AppendCopyBinaryHeaders(copyOutState);
-		WriteToLocalFile(copyOutState->fe_msgbuf, &shardState->fileDest);
-		resetStringInfo(copyOutState->fe_msgbuf);
+		AppendCopyBinaryHeaders(localFileCopyOutState);
 	}
 }
 
 
 static void
-FinishLocalFile(CitusCopyDestReceiver *copyDest)
+FinishLocalColocatedIntermediateFile(CitusCopyDestReceiver *copyDest)
 {
 	HTAB *shardStateHash = copyDest->shardStateHash;
 	HASH_SEQ_STATUS status;
@@ -2791,21 +2789,8 @@ FinishLocalFile(CitusCopyDestReceiver *copyDest)
 		if (copyShardState->copyOutState != NULL &&
 			copyShardState->fileDest.fd > 0)
 		{
-			bool isBinaryCopy = copyShardState->copyOutState->binary;
-
-			if (isBinaryCopy)
-			{
-				/*
-				 * We're going to flush the buffer to disk by effectively doing a full
-				 * COPY command. Hence we also need to add footers to the current buffer.
-				 */
-				resetStringInfo(copyShardState->copyOutState->fe_msgbuf);
-				AppendCopyBinaryFooters(copyShardState->copyOutState);
-				WriteToLocalFile(copyShardState->copyOutState->fe_msgbuf,
-								 &copyShardState->fileDest);
-				resetStringInfo(copyShardState->copyOutState->fe_msgbuf);
-			}
-			FileClose(copyShardState->fileDest.fd);
+			FinishLocalCopyToFile(copyShardState->copyOutState,
+								  &copyShardState->fileDest);
 		}
 	}
 }

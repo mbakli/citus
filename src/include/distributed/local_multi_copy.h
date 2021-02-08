@@ -13,8 +13,13 @@ extern void WriteTupleToLocalShard(TupleTableSlot *slot, CitusCopyDestReceiver *
 								   int64
 								   shardId,
 								   CopyOutState localCopyOutState);
+extern void WriteTupleToLocalFile(TupleTableSlot *slot, CitusCopyDestReceiver *copyDest,
+								  int64 shardId, CopyOutState localFileCopyOutState,
+								  FileCompat *fileCompat);
 extern void FinishLocalCopyToShard(CitusCopyDestReceiver *copyDest, int64 shardId,
 								   CopyOutState localCopyOutState);
+extern void FinishLocalCopyToFile(CopyOutState localFileCopyOutState,
+								  FileCompat *fileCompat);
 extern bool ShouldAddBinaryHeaders(StringInfo buffer, bool isBinary);
 extern void AddSlotToBuffer(TupleTableSlot *slot, CitusCopyDestReceiver *copyDest,
 							CopyOutState localCopyOutState);

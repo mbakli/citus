@@ -30,6 +30,7 @@
 
 #include "distributed/transmit.h"
 #include "distributed/commands/multi_copy.h"
+#include "distributed/intermediate_results.h"
 #include "distributed/multi_partitioning_utils.h"
 #include "distributed/local_executor.h"
 #include "distributed/local_multi_copy.h"
@@ -91,6 +92,21 @@ WriteTupleToLocalShard(TupleTableSlot *slot, CitusCopyDestReceiver *copyDest, in
 }
 
 
+void
+WriteTupleToLocalFile(TupleTableSlot *slot, CitusCopyDestReceiver *copyDest,
+					  int64 shardId, CopyOutState localFileCopyOutState,
+					  FileCompat *fileCompat)
+{
+	AddSlotToBuffer(slot, copyDest, localFileCopyOutState);
+
+	if (ShouldSendCopyNow(localFileCopyOutState->fe_msgbuf))
+	{
+		WriteToLocalFile(localFileCopyOutState->fe_msgbuf, fileCompat);
+		resetStringInfo(localFileCopyOutState->fe_msgbuf);
+	}
+}
+
+
 /*
  * FinishLocalCopyToShard finishes local copy for the given shard with the shard id.
  */
@@ -106,6 +122,26 @@ FinishLocalCopyToShard(CitusCopyDestReceiver *copyDest, int64 shardId,
 	bool isEndOfCopy = true;
 	DoLocalCopy(localCopyOutState->fe_msgbuf, copyDest->distributedRelationId, shardId,
 				copyDest->copyStatement, isEndOfCopy);
+}
+
+
+/*
+ * FinishLocalCopyToShard finishes local copy for the given shard with the shard id.
+ */
+void
+FinishLocalCopyToFile(CopyOutState localFileCopyOutState, FileCompat *fileCompat)
+{
+	StringInfo data = localFileCopyOutState->fe_msgbuf;
+
+	bool isBinaryCopy = localFileCopyOutState->binary;
+	if (isBinaryCopy)
+	{
+		AppendCopyBinaryFooters(localFileCopyOutState);
+	}
+	WriteToLocalFile(data, fileCompat);
+	resetStringInfo(localFileCopyOutState->fe_msgbuf);
+
+	FileClose(fileCompat->fd);
 }
 
 
