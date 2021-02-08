@@ -1267,6 +1267,7 @@ SELECT pg_reload_conf();
 -- this is to prevent random failures in the tests (otherwise, we
 -- might see connections established for this operations)
 ALTER SYSTEM SET citus.distributed_deadlock_detection_factor TO -1;
+ERROR:  could not open file "postgresql.auto.conf.tmp": Interrupted system call
 ALTER SYSTEM SET citus.recover_2pc_interval TO '1ms';
 SELECT pg_reload_conf();
  pg_reload_conf
@@ -1616,30 +1617,40 @@ NOTICE:  executing the command locally: SELECT a, b FROM single_node.another_sch
 NOTICE:  executing the command locally: SELECT a, b FROM single_node.another_schema_table_90630512 another_schema_table WHERE true LIMIT '10000'::bigint
 NOTICE:  executing the command locally: SELECT a, b FROM single_node.another_schema_table_90630513 another_schema_table WHERE true LIMIT '10000'::bigint
 NOTICE:  executing the command locally: SELECT a, b FROM single_node.another_schema_table_90630514 another_schema_table WHERE true LIMIT '10000'::bigint
-NOTICE:  executing the copy locally for shard xxxxx
-NOTICE:  executing the copy locally for shard xxxxx
-NOTICE:  executing the copy locally for shard xxxxx
-NOTICE:  executing the copy locally for shard xxxxx
+NOTICE:  executing the copy for colocated file with shard xxxxx
+NOTICE:  executing the copy for colocated file with shard xxxxx
+NOTICE:  executing the copy for colocated file with shard xxxxx
+NOTICE:  executing the copy for colocated file with shard xxxxx
 NOTICE:  executing the command locally: INSERT INTO single_node.another_schema_table_90630511 AS citus_table_alias (a, b) SELECT a, b FROM read_intermediate_result('insert_select_XXX_90630511'::text, 'binary'::citus_copy_format) intermediate_result(a integer, b integer) ON CONFLICT(a) DO NOTHING
 NOTICE:  executing the command locally: INSERT INTO single_node.another_schema_table_90630512 AS citus_table_alias (a, b) SELECT a, b FROM read_intermediate_result('insert_select_XXX_90630512'::text, 'binary'::citus_copy_format) intermediate_result(a integer, b integer) ON CONFLICT(a) DO NOTHING
 NOTICE:  executing the command locally: INSERT INTO single_node.another_schema_table_90630513 AS citus_table_alias (a, b) SELECT a, b FROM read_intermediate_result('insert_select_XXX_90630513'::text, 'binary'::citus_copy_format) intermediate_result(a integer, b integer) ON CONFLICT(a) DO NOTHING
 NOTICE:  executing the command locally: INSERT INTO single_node.another_schema_table_90630514 AS citus_table_alias (a, b) SELECT a, b FROM read_intermediate_result('insert_select_XXX_90630514'::text, 'binary'::citus_copy_format) intermediate_result(a integer, b integer) ON CONFLICT(a) DO NOTHING
-INSERT INTO another_schema_table SELECT * FROM another_schema_table ORDER BY a LIMIT 10 ON CONFLICT(a) DO NOTHING RETURNING *;
+INSERT INTO another_schema_table SELECT * FROM another_schema_table ORDER BY a LIMIT 10 ON CONFLICT(a) DO UPDATE SET b = EXCLUDED.b + 1 RETURNING *;
 NOTICE:  executing the command locally: SELECT a, b FROM single_node.another_schema_table_90630511 another_schema_table WHERE true ORDER BY a LIMIT '10'::bigint
 NOTICE:  executing the command locally: SELECT a, b FROM single_node.another_schema_table_90630512 another_schema_table WHERE true ORDER BY a LIMIT '10'::bigint
 NOTICE:  executing the command locally: SELECT a, b FROM single_node.another_schema_table_90630513 another_schema_table WHERE true ORDER BY a LIMIT '10'::bigint
 NOTICE:  executing the command locally: SELECT a, b FROM single_node.another_schema_table_90630514 another_schema_table WHERE true ORDER BY a LIMIT '10'::bigint
-NOTICE:  executing the copy locally for shard xxxxx
-NOTICE:  executing the copy locally for shard xxxxx
-NOTICE:  executing the copy locally for shard xxxxx
-NOTICE:  executing the copy locally for shard xxxxx
-NOTICE:  executing the command locally: INSERT INTO single_node.another_schema_table_90630511 AS citus_table_alias (a, b) SELECT a, b FROM read_intermediate_result('insert_select_XXX_90630511'::text, 'binary'::citus_copy_format) intermediate_result(a integer, b integer) ON CONFLICT(a) DO NOTHING RETURNING citus_table_alias.a, citus_table_alias.b
-NOTICE:  executing the command locally: INSERT INTO single_node.another_schema_table_90630512 AS citus_table_alias (a, b) SELECT a, b FROM read_intermediate_result('insert_select_XXX_90630512'::text, 'binary'::citus_copy_format) intermediate_result(a integer, b integer) ON CONFLICT(a) DO NOTHING RETURNING citus_table_alias.a, citus_table_alias.b
-NOTICE:  executing the command locally: INSERT INTO single_node.another_schema_table_90630513 AS citus_table_alias (a, b) SELECT a, b FROM read_intermediate_result('insert_select_XXX_90630513'::text, 'binary'::citus_copy_format) intermediate_result(a integer, b integer) ON CONFLICT(a) DO NOTHING RETURNING citus_table_alias.a, citus_table_alias.b
-NOTICE:  executing the command locally: INSERT INTO single_node.another_schema_table_90630514 AS citus_table_alias (a, b) SELECT a, b FROM read_intermediate_result('insert_select_XXX_90630514'::text, 'binary'::citus_copy_format) intermediate_result(a integer, b integer) ON CONFLICT(a) DO NOTHING RETURNING citus_table_alias.a, citus_table_alias.b
- a | b
+NOTICE:  executing the copy for colocated file with shard xxxxx
+NOTICE:  executing the copy for colocated file with shard xxxxx
+NOTICE:  executing the copy for colocated file with shard xxxxx
+NOTICE:  executing the copy for colocated file with shard xxxxx
+NOTICE:  executing the command locally: INSERT INTO single_node.another_schema_table_90630511 AS citus_table_alias (a, b) SELECT a, b FROM read_intermediate_result('insert_select_XXX_90630511'::text, 'binary'::citus_copy_format) intermediate_result(a integer, b integer) ON CONFLICT(a) DO UPDATE SET b = (excluded.b OPERATOR(pg_catalog.+) 1) RETURNING citus_table_alias.a, citus_table_alias.b
+NOTICE:  executing the command locally: INSERT INTO single_node.another_schema_table_90630512 AS citus_table_alias (a, b) SELECT a, b FROM read_intermediate_result('insert_select_XXX_90630512'::text, 'binary'::citus_copy_format) intermediate_result(a integer, b integer) ON CONFLICT(a) DO UPDATE SET b = (excluded.b OPERATOR(pg_catalog.+) 1) RETURNING citus_table_alias.a, citus_table_alias.b
+NOTICE:  executing the command locally: INSERT INTO single_node.another_schema_table_90630513 AS citus_table_alias (a, b) SELECT a, b FROM read_intermediate_result('insert_select_XXX_90630513'::text, 'binary'::citus_copy_format) intermediate_result(a integer, b integer) ON CONFLICT(a) DO UPDATE SET b = (excluded.b OPERATOR(pg_catalog.+) 1) RETURNING citus_table_alias.a, citus_table_alias.b
+NOTICE:  executing the command locally: INSERT INTO single_node.another_schema_table_90630514 AS citus_table_alias (a, b) SELECT a, b FROM read_intermediate_result('insert_select_XXX_90630514'::text, 'binary'::citus_copy_format) intermediate_result(a integer, b integer) ON CONFLICT(a) DO UPDATE SET b = (excluded.b OPERATOR(pg_catalog.+) 1) RETURNING citus_table_alias.a, citus_table_alias.b
+ a  | b
 ---------------------------------------------------------------------
-(0 rows)
+  1 |
+  2 |
+  3 |
+  4 |
+  5 |
+  6 |
+  7 |
+  8 |
+  9 |
+ 10 |
+(10 rows)
 
 -- if the local execution is disabled, we cannot failover to
 -- local execution and the queries would fail
