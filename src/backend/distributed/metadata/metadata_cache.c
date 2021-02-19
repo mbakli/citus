@@ -4112,6 +4112,7 @@ GetPartitionTypeInputInfo(char *partitionKeyString, char partitionMethod,
 	{
 		case DISTRIBUTE_BY_APPEND:
 		case DISTRIBUTE_BY_RANGE:
+        case DISTRIBUTE_BY_MDTILING:
 		{
 			Node *partitionNode = stringToNode(partitionKeyString);
 			Var *partitionColumn = (Var *) partitionNode;

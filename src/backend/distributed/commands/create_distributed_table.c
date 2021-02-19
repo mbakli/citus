@@ -246,7 +246,7 @@ create_distributed_table(PG_FUNCTION_ARGS)
 Datum
 create_spatiotemporal_distributed_table(PG_FUNCTION_ARGS)
 {
-	bool viaDeprecatedAPI = false;
+	bool viaDeprecatedAPI = false; // It must be false as the original
 
 	Oid relationId = PG_GETARG_OID(0);
 	text *distributionColumnText = PG_GETARG_TEXT_P(1);
@@ -519,6 +519,7 @@ CreateDistributedTable(Oid relationId, Var *distributionColumn, char distributio
 	}
     else if (distributionMethod == DISTRIBUTE_BY_MDTILING)
     {
+        ereport(WARNING, (errmsg("Function:CreateSpatiotemporalDistributedTableShards ")));
         CreateSpatiotemporalDistributedTableShards(relationId, shardCount, colocatedTableId,
                                          localTableEmpty);
     }
@@ -750,7 +751,6 @@ static void
 CreateSpatiotemporalDistributedTableShards(Oid relationId, int shardCount,
                                  Oid colocatedTableId, bool localTableEmpty)
 {
-    ereport(WARNING, (errmsg("Function:CreateSpatiotemporalDistributedTableShards ")));
     bool useExclusiveConnection = false;
 
     /*
@@ -776,7 +776,7 @@ CreateSpatiotemporalDistributedTableShards(Oid relationId, int shardCount,
          * tables which will not be part of an existing colocation group. Therefore,
          * we can directly use ShardReplicationFactor global variable here.
          */
-        CreateShardsWithRoundRobinPolicy(relationId, shardCount, ShardReplicationFactor,
+        CreateShardsWithSpatiotemporalMethod(relationId, shardCount, ShardReplicationFactor,
                                          useExclusiveConnection);
     }
 }
@@ -805,10 +805,8 @@ ColocationIdForNewTable(Oid relationId, Var *distributionColumn,
 		return colocationId;
 	}
 	else if (distributionMethod == DISTRIBUTE_BY_APPEND ||
-			 distributionMethod == DISTRIBUTE_BY_RANGE ||
-             distributionMethod == DISTRIBUTE_BY_MDTILING)
+			 distributionMethod == DISTRIBUTE_BY_RANGE)
 	{
-
 		if (pg_strncasecmp(colocateWithTableName, "default", NAMEDATALEN) != 0)
 		{
 			ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
@@ -816,9 +814,12 @@ ColocationIdForNewTable(Oid relationId, Var *distributionColumn,
 							errdetail("Currently, colocate_with option is only supported "
 									  "for hash distributed tables.")));
 		}
-
 		return colocationId;
 	}
+    else if (distributionMethod == DISTRIBUTE_BY_MDTILING)
+    {
+        return  colocationId;
+    }
 	else if (distributionMethod == DISTRIBUTE_BY_NONE)
 	{
 		return CreateReferenceTableColocationId();
@@ -1157,6 +1158,11 @@ ShouldLocalTableBeEmpty(Oid relationId, char distributionMethod,
 		/* we don't support copying local data via deprecated API */
 		shouldLocalTableBeEmpty = true;
 	}
+	else if (distributionMethod == DISTRIBUTE_BY_MDTILING)
+    {
+        /* Data loading can be done */
+        shouldLocalTableBeEmpty = false;
+    }
 	else if (distributionMethod != DISTRIBUTE_BY_HASH &&
 			 distributionMethod != DISTRIBUTE_BY_NONE)
 	{

@@ -233,6 +233,140 @@ CreateShardsWithRoundRobinPolicy(Oid distributedTableId, int32 shardCount,
 
 
 /*
+ * CreateShardsWithSpatiotemporalMethod creates empty shards for the given table
+ * based on the specified number of initial shards. The function first updates
+ * metadata on the coordinator node to make this shard (and its placements)
+ * visible. Note that the function assumes the table is spatiotemporal partitioned and
+ * calculates the spatiotemporal extent for each shard.
+ * Finally, function creates empty shard placements on worker nodes.
+ */
+void
+CreateShardsWithSpatiotemporalMethod(Oid distributedTableId, int32 shardCount,
+								 int32 replicationFactor, bool useExclusiveConnections)
+{
+    ereport(WARNING, (errmsg("Function:CreateShardsWithSpatiotemporalMethod ")));
+	CitusTableCacheEntry *cacheEntry = GetCitusTableCacheEntry(distributedTableId);
+	bool colocatedShard = false;
+	List *insertedShardPlacements = NIL;
+
+	/*
+	 * In contrast to append/range partitioned tables it makes more sense to
+	 * require ownership privileges - shards for hash-partitioned tables are
+	 * only created once, not continually during ingest as for the other
+	 * partitioning types.
+	 */
+	EnsureTableOwner(distributedTableId);
+
+	/* we plan to add shards: get an exclusive lock on relation oid */
+	LockRelationOid(distributedTableId, ExclusiveLock);
+
+	/* validate that shards haven't already been created for this table */
+	List *existingShardList = LoadShardList(distributedTableId);
+	if (existingShardList != NIL)
+	{
+		char *tableName = get_rel_name(distributedTableId);
+		ereport(ERROR, (errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				errmsg("table \"%s\" has already had shards created for it",
+					   tableName)));
+	}
+
+	/* make sure that at least one shard is specified */
+	if (shardCount <= 0)
+	{
+		ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				errmsg("shard_count must be positive")));
+	}
+
+	/* make sure that at least one replica is specified */
+	if (replicationFactor <= 0)
+	{
+		ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				errmsg("replication_factor must be positive")));
+	}
+
+	/* make sure that RF=1 if the table is streaming replicated */
+	if (cacheEntry->replicationModel == REPLICATION_MODEL_STREAMING &&
+		replicationFactor > 1)
+	{
+		char *relationName = get_rel_name(cacheEntry->relationId);
+		ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				errmsg("using replication factor %d with the streaming "
+					   "replication model is not supported",
+					   replicationFactor),
+				errdetail("The table %s is marked as streaming replicated and "
+						  "the shard replication factor of streaming replicated "
+						  "tables must be 1.", relationName),
+				errhint("Use replication factor 1.")));
+	}
+
+	/* don't allow concurrent node list changes that require an exclusive lock */
+	LockRelationOid(DistNodeRelationId(), RowShareLock);
+
+	/* load and sort the worker node list for deterministic placement */
+	List *workerNodeList = DistributedTablePlacementNodeList(NoLock);
+	workerNodeList = SortList(workerNodeList, CompareWorkerNodes);
+
+	int32 workerNodeCount = list_length(workerNodeList);
+	if (replicationFactor > workerNodeCount)
+	{
+		ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				errmsg("replication_factor (%d) exceeds number of worker nodes "
+					   "(%d)", replicationFactor, workerNodeCount),
+				errhint("Add more worker nodes or try again with a lower "
+						"replication factor.")));
+	}
+
+	/* if we have enough nodes, add an extra placement attempt for backup */
+	uint32 placementAttemptCount = (uint32) replicationFactor;
+	if (workerNodeCount > replicationFactor)
+	{
+		placementAttemptCount++;
+	}
+
+	/* set shard storage type according to relation type */
+	char shardStorageType = ShardStorageType(distributedTableId);
+
+	/* Get the spatiotemporal extent */
+
+
+
+
+	for (int64 shardIndex = 0; shardIndex < shardCount; shardIndex++)
+	{
+		uint32 roundRobinNodeIndex = shardIndex % workerNodeCount;
+
+		/* initialize the hash token space for this shard */
+		int32 shardMinHashToken = PG_INT32_MIN + (shardIndex * hashTokenIncrement);
+		int32 shardMaxHashToken = shardMinHashToken + (hashTokenIncrement - 1);
+		uint64 shardId = GetNextShardId();
+
+		/* if we are at the last shard, make sure the max token value is INT_MAX */
+		if (shardIndex == (shardCount - 1))
+		{
+			shardMaxHashToken = PG_INT32_MAX;
+		}
+
+		/* insert the shard metadata row along with its min/max values */
+		text *minHashTokenText = IntegerToText(shardMinHashToken);
+		text *maxHashTokenText = IntegerToText(shardMaxHashToken);
+
+		InsertShardRow(distributedTableId, shardId, shardStorageType,
+					   minHashTokenText, maxHashTokenText);
+
+		List *currentInsertedShardPlacements = InsertShardPlacementRows(
+				distributedTableId,
+				shardId,
+				workerNodeList,
+				roundRobinNodeIndex,
+				replicationFactor);
+		insertedShardPlacements = list_concat(insertedShardPlacements,
+											  currentInsertedShardPlacements);
+	}
+
+	CreateShardsOnWorkers(distributedTableId, insertedShardPlacements,
+						  useExclusiveConnections, colocatedShard);
+}
+/*
  * CreateColocatedShards creates shards for the target relation colocated with
  * the source relation.
  */
