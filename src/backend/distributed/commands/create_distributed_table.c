@@ -96,6 +96,8 @@ int ReplicationModel = REPLICATION_MODEL_COORDINATOR;
 static char DecideReplicationModel(char distributionMethod, bool viaDeprecatedAPI);
 static void CreateHashDistributedTableShards(Oid relationId, int shardCount,
 											 Oid colocatedTableId, bool localTableEmpty);
+static void CreateSpatiotemporalDistributedTableShards(Oid relationId, int shardCount,
+                                             Oid colocatedTableId, bool localTableEmpty);
 static uint32 ColocationIdForNewTable(Oid relationId, Var *distributionColumn,
 									  char distributionMethod, char replicationModel,
 									  int shardCount, char *colocateWithTableName,
@@ -133,6 +135,7 @@ static void DoCopyFromLocalTableIntoShards(Relation distributedRelation,
 /* exports for SQL callable functions */
 PG_FUNCTION_INFO_V1(master_create_distributed_table);
 PG_FUNCTION_INFO_V1(create_distributed_table);
+PG_FUNCTION_INFO_V1(create_spatiotemporal_distributed_table);
 PG_FUNCTION_INFO_V1(create_reference_table);
 
 
@@ -235,6 +238,57 @@ create_distributed_table(PG_FUNCTION_ARGS)
 	PG_RETURN_VOID();
 }
 
+/*
+ * create_distributed_table gets a table name, distribution column,
+ * distribution method and colocate_with option, then it creates a
+ * distributed table.
+ */
+Datum
+create_spatiotemporal_distributed_table(PG_FUNCTION_ARGS)
+{
+	bool viaDeprecatedAPI = false;
+
+	Oid relationId = PG_GETARG_OID(0);
+	text *distributionColumnText = PG_GETARG_TEXT_P(1);
+	Oid distributionMethodOid = PG_GETARG_OID(2);
+	text *extentText = PG_GETARG_TEXT_P(3);
+    text *colocateWithTableNameText = PG_GETARG_TEXT_P(4);
+
+	CheckCitusVersion(ERROR);
+
+	EnsureCitusTableCanBeCreated(relationId);
+
+	/* enable create_distributed_table on an empty node */
+	InsertCoordinatorIfClusterEmpty();
+
+	/*
+	 * Lock target relation with an exclusive lock - there's no way to make
+	 * sense of this table until we've committed, and we don't want multiple
+	 * backends manipulating this relation.
+	 */
+	Relation relation = try_relation_open(relationId, ExclusiveLock);
+	if (relation == NULL)
+	{
+		ereport(ERROR, (errmsg("could not create distributed table: "
+							   "relation does not exist")));
+	}
+
+	relation_close(relation, NoLock);
+
+	char *distributionColumnName = text_to_cstring(distributionColumnText);
+	Var *distributionColumn = BuildDistributionKeyFromColumnName(relation,
+																 distributionColumnName);
+	Assert(distributionColumn != NULL);
+	char distributionMethod = LookupDistributionMethod(distributionMethodOid);
+
+	char *colocateWithTableName = NULL;//text_to_cstring(colocateWithTableNameText);
+
+    ereport(WARNING, (errmsg("Function:create_spatiotemporal_distributed_table ")));
+	CreateDistributedTable(relationId, distributionColumn, distributionMethod,
+						   ShardCount, colocateWithTableName, viaDeprecatedAPI);
+
+	PG_RETURN_VOID();
+}
 
 /*
  * CreateReferenceTable creates a distributed table with the given relationId. The
@@ -416,13 +470,16 @@ CreateDistributedTable(Oid relationId, Var *distributionColumn, char distributio
 	 * ColocationIdForNewTable assumes caller acquires lock on relationId. In our case,
 	 * our caller already acquired lock on relationId.
 	 */
+    ereport(WARNING, (errmsg("Function:CreateDistributedTable ")));
 	uint32 colocationId = ColocationIdForNewTable(relationId, distributionColumn,
 												  distributionMethod, replicationModel,
 												  shardCount, colocateWithTableName,
 												  viaDeprecatedAPI);
+    ereport(WARNING, (errmsg("Function:ColocationIdForNewTable ")));
 
 	EnsureRelationCanBeDistributed(relationId, distributionColumn, distributionMethod,
 								   colocationId, replicationModel, viaDeprecatedAPI);
+    ereport(WARNING, (errmsg("Function:EnsureRelationCanBeDistributed ")));
 
 	/*
 	 * Make sure that existing reference tables have been replicated to all the nodes
@@ -460,6 +517,11 @@ CreateDistributedTable(Oid relationId, Var *distributionColumn, char distributio
 		CreateHashDistributedTableShards(relationId, shardCount, colocatedTableId,
 										 localTableEmpty);
 	}
+    else if (distributionMethod == DISTRIBUTE_BY_MDTILING)
+    {
+        CreateSpatiotemporalDistributedTableShards(relationId, shardCount, colocatedTableId,
+                                         localTableEmpty);
+    }
 	else if (distributionMethod == DISTRIBUTE_BY_NONE)
 	{
 		/*
@@ -681,6 +743,43 @@ CreateHashDistributedTableShards(Oid relationId, int shardCount,
 	}
 }
 
+/*
+ * CreateSpatiotemporalDistributedTableShards creates a spatiotemporal bounding box for each shards.
+ */
+static void
+CreateSpatiotemporalDistributedTableShards(Oid relationId, int shardCount,
+                                 Oid colocatedTableId, bool localTableEmpty)
+{
+    ereport(WARNING, (errmsg("Function:CreateSpatiotemporalDistributedTableShards ")));
+    bool useExclusiveConnection = false;
+
+    /*
+     * Decide whether to use exclusive connections per placement or not. Note that
+     * if the local table is not empty, we cannot use sequential mode since the COPY
+     * operation that'd load the data into shards currently requires exclusive
+     * connections.
+     */
+    if (RegularTable(relationId))
+    {
+        useExclusiveConnection = CanUseExclusiveConnections(relationId,
+                                                            localTableEmpty);
+    }
+
+    if (colocatedTableId != InvalidOid)
+    {
+        CreateColocatedShards(relationId, colocatedTableId, useExclusiveConnection);
+    }
+    else
+    {
+        /*
+         * This path is only reached by create_distributed_table for the distributed
+         * tables which will not be part of an existing colocation group. Therefore,
+         * we can directly use ShardReplicationFactor global variable here.
+         */
+        CreateShardsWithRoundRobinPolicy(relationId, shardCount, ShardReplicationFactor,
+                                         useExclusiveConnection);
+    }
+}
 
 /*
  * ColocationIdForNewTable returns a colocation id for hash-distributed table
@@ -706,8 +805,10 @@ ColocationIdForNewTable(Oid relationId, Var *distributionColumn,
 		return colocationId;
 	}
 	else if (distributionMethod == DISTRIBUTE_BY_APPEND ||
-			 distributionMethod == DISTRIBUTE_BY_RANGE)
+			 distributionMethod == DISTRIBUTE_BY_RANGE ||
+             distributionMethod == DISTRIBUTE_BY_MDTILING)
 	{
+
 		if (pg_strncasecmp(colocateWithTableName, "default", NAMEDATALEN) != 0)
 		{
 			ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
@@ -1204,6 +1305,10 @@ LookupDistributionMethod(Oid distributionMethodOid)
 	else if (strncmp(enumLabel, "range", NAMEDATALEN) == 0)
 	{
 		distributionMethod = DISTRIBUTE_BY_RANGE;
+	}
+	else if (strncmp(enumLabel, "md_tiling", NAMEDATALEN) == 0)
+	{
+		distributionMethod = DISTRIBUTE_BY_MDTILING;
 	}
 	else
 	{

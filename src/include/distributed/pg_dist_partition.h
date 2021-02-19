@@ -52,6 +52,7 @@ typedef FormData_pg_dist_partition *Form_pg_dist_partition;
 #define DISTRIBUTE_BY_APPEND 'a'
 #define DISTRIBUTE_BY_HASH 'h'
 #define DISTRIBUTE_BY_RANGE 'r'
+#define DISTRIBUTE_BY_MDTILING 'm'
 #define DISTRIBUTE_BY_NONE 'n'
 #define REDISTRIBUTE_BY_HASH 'x'
 

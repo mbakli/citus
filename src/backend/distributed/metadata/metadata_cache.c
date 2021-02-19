@@ -311,7 +311,6 @@ bool
 IsCitusTableType(Oid relationId, CitusTableType tableType)
 {
 	CitusTableCacheEntry *tableEntry = LookupCitusTableCacheEntry(relationId);
-
 	/* we are not interested in postgres tables */
 	if (tableEntry == NULL)
 	{
@@ -357,17 +356,22 @@ IsCitusTableTypeInternal(char partitionMethod, char replicationModel,
 		{
 			return partitionMethod == DISTRIBUTE_BY_RANGE;
 		}
-
+		case MDTILING__DISTRIBUTED:
+		{
+			return partitionMethod == DISTRIBUTE_BY_MDTILING;
+		}
 		case DISTRIBUTED_TABLE:
 		{
 			return partitionMethod == DISTRIBUTE_BY_HASH ||
 				   partitionMethod == DISTRIBUTE_BY_RANGE ||
+				   partitionMethod == DISTRIBUTE_BY_MDTILING ||
 				   partitionMethod == DISTRIBUTE_BY_APPEND;
 		}
 
 		case STRICTLY_PARTITIONED_DISTRIBUTED_TABLE:
 		{
 			return partitionMethod == DISTRIBUTE_BY_HASH ||
+				   partitionMethod == DISTRIBUTE_BY_MDTILING ||
 				   partitionMethod == DISTRIBUTE_BY_RANGE;
 		}
 
