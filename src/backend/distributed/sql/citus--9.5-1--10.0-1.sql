@@ -1,7 +1,7 @@
 -- citus--9.5-1--10.0-1
 
 DROP FUNCTION pg_catalog.upgrade_to_reference_table(regclass);
-DROP FUNCTION IF EXISTS pg_catalog.citus_total_relation_size(regclass);
+DROP FUNCTION IF EXISTS pg_catalog.upgrade_to_reference_table(regclass);
 
 #include "udfs/citus_total_relation_size/10.0-1.sql"
 #include "udfs/citus_tables/10.0-1.sql"
@@ -28,6 +28,7 @@ DROP FUNCTION IF EXISTS pg_catalog.citus_total_relation_size(regclass);
 #include "udfs/citus_drop_trigger/10.0-1.sql"
 #include "udfs/worker_change_sequence_dependency/10.0-1.sql"
 #include "udfs/remove_local_tables_from_metadata/10.0-1.sql"
+#include "udfs/create_spatial_distributed_table/10.0-1.sql"
 
 #include "../../columnar/sql/columnar--9.5-1--10.0-1.sql"
 
