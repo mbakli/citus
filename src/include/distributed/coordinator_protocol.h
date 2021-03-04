@@ -212,6 +212,7 @@ extern void CheckHashPartitionedTable(Oid distributedTableId);
 extern void CheckTableSchemaNameForDrop(Oid relationId, char **schemaName,
 										char **tableName);
 extern text * IntegerToText(int32 value);
+extern text * GBOXToText(GBOX *value);
 
 /* Function declarations for generating metadata for shard and placement creation */
 extern Datum master_get_table_metadata(PG_FUNCTION_ARGS);

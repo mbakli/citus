@@ -10,6 +10,7 @@
  *-------------------------------------------------------------------------
  */
 
+#include <liblwgeom.h>
 #include "postgres.h"
 #include "funcapi.h"
 #include "libpq-fe.h"
@@ -1260,6 +1261,48 @@ InsertShardRow(Oid relationId, uint64 shardId, char storageType,
 	table_close(pgDistShard, NoLock);
 }
 
+/*
+ * A modified version of the previous function but for the spatial and spatiotemporal bounding box for shards.
+ * For the moment, I store the bbox as a text in shardMinvalue
+ */
+void
+InsertShardExtent(Oid relationId, uint64 shardId, char storageType,
+			   GBOX *shardExtent)
+{
+	Datum values[Natts_pg_dist_shard];
+	bool isNulls[Natts_pg_dist_shard];
+
+	/* form new shard tuple */
+	memset(values, 0, sizeof(values));
+	memset(isNulls, false, sizeof(isNulls));
+
+	values[Anum_pg_dist_shard_logicalrelid - 1] = ObjectIdGetDatum(relationId);
+	values[Anum_pg_dist_shard_shardid - 1] = Int64GetDatum(shardId);
+	values[Anum_pg_dist_shard_shardstorage - 1] = CharGetDatum(storageType);
+
+	/* dropped shardalias column must also be set; it is still part of the tuple */
+	isNulls[Anum_pg_dist_shard_shardalias_DROPPED - 1] = true;
+
+	// Shard bounding box: (x1,y1,z1,t1), (x2,y2,z2,t2)
+    text *shardMinValueText = GBOXToText(shardExtent);
+
+	values[Anum_pg_dist_shard_shardminvalue - 1] = PointerGetDatum(shardMinValueText);
+    isNulls[Anum_pg_dist_shard_shardmaxvalue - 1] = true;
+
+    /* open shard relation and insert new tuple */
+    Relation pgDistShard = table_open(DistShardRelationId(), RowExclusiveLock);
+
+    TupleDesc tupleDescriptor = RelationGetDescr(pgDistShard);
+    HeapTuple heapTuple = heap_form_tuple(tupleDescriptor, values, isNulls);
+
+    CatalogTupleInsert(pgDistShard, heapTuple);
+
+    /* invalidate previous cache entry and close relation */
+    CitusInvalidateRelcacheByRelid(relationId);
+
+    CommandCounterIncrement();
+    table_close(pgDistShard, NoLock);
+}
 
 /*
  * InsertShardPlacementRow opens the shard placement system catalog, and inserts

@@ -294,6 +294,7 @@ FindShardInterval(Datum partitionColumnValue, CitusTableCacheEntry *cacheEntry)
 int
 FindShardIntervalIndex(Datum searchedValue, CitusTableCacheEntry *cacheEntry)
 {
+	ereport(WARNING, (errmsg("Function:FindShardIntervalIndex ")));
 	ShardInterval **shardIntervalCache = cacheEntry->sortedShardIntervalArray;
 	int shardCount = cacheEntry->shardIntervalArrayLength;
 	FmgrInfo *compareFunction = cacheEntry->shardIntervalCompareFunction;

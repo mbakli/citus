@@ -33,11 +33,27 @@ typedef struct FormData_pg_dist_shard
 } FormData_pg_dist_shard;
 
 /* ----------------
+ *		pg_dist_shard_spatial definition.
+ * ----------------
+ */
+typedef struct FormData_pg_dist_shard_spatial
+{
+	Oid logicalrelid;         /* logical relation id; references pg_class oid */
+	int64 shardid;            /* global shardId representing remote partition */
+	char shardstorage;        /* shard storage type; see codes below */
+#ifdef CATALOG_VARLEN           /* variable-length fields start here */
+	text shardalias_DROPPED;      /* dropped column, not in use */
+	GBOX bbox;        /* bbox of the shard */
+#endif
+} FormData_pg_dist_shard_spatial;
+
+/* ----------------
  *      Form_pg_dist_shards corresponds to a pointer to a tuple with
  *      the format of pg_dist_shards relation.
  * ----------------
  */
 typedef FormData_pg_dist_shard *Form_pg_dist_shard;
+typedef FormData_pg_dist_shard_spatial *Form_pg_dist_shard_spatial;
 
 /* ----------------
  *      compiler constants for pg_dist_shards
@@ -51,6 +67,12 @@ typedef FormData_pg_dist_shard *Form_pg_dist_shard;
 #define Anum_pg_dist_shard_shardminvalue 5
 #define Anum_pg_dist_shard_shardmaxvalue 6
 
+/* ----------------
+ *      additional constants for pg_dist_shards_spatial
+ * ----------------
+ */
+#define Natts_pg_dist_shard_spatial 4
+#define Anum_pg_dist_shard_bbox 4
 /*
  * Valid values for shard storage types include foreign table, (standard) table
  * and columnar table.

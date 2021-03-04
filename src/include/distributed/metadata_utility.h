@@ -23,6 +23,7 @@
 #include "catalog/objectaddress.h"
 #include "distributed/citus_nodes.h"
 #include "distributed/relay_utility.h"
+#include "distributed/postgis.h"
 #include "utils/acl.h"
 #include "utils/relcache.h"
 
@@ -210,6 +211,8 @@ extern ShardPlacement * ShardPlacementOnGroup(uint64 shardId, int groupId);
 /* Function declarations to modify shard and shard placement data */
 extern void InsertShardRow(Oid relationId, uint64 shardId, char storageType,
 						   text *shardMinValue, text *shardMaxValue);
+extern void InsertShardExtent(Oid relationId, uint64 shardId, char storageType,
+						   GBOX *shardExtent);
 extern void DeleteShardRow(uint64 shardId);
 extern uint64 InsertShardPlacementRow(uint64 shardId, uint64 placementId,
 									  char shardState, uint64 shardLength,

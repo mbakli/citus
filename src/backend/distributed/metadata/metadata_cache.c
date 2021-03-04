@@ -7,6 +7,7 @@
  *-------------------------------------------------------------------------
  */
 
+#include <distributed/metadata_cache.h>
 #include "distributed/pg_version_constants.h"
 
 #include "stdint.h"
@@ -1286,6 +1287,11 @@ BuildCitusTableCacheEntry(Oid relationId)
 		cacheEntry->hasUniformHashDistribution =
 			HasUniformHashDistribution(cacheEntry->sortedShardIntervalArray,
 									   cacheEntry->shardIntervalArrayLength);
+	}
+	/* we only need overlapping functions for MD tiling distributed tables */
+	else if (cacheEntry->partitionMethod == DISTRIBUTE_BY_MDTILING)
+	{
+        cacheEntry->hashFunction = NULL;//TODO: Add the overlapping function
 	}
 	else
 	{
@@ -4112,7 +4118,7 @@ GetPartitionTypeInputInfo(char *partitionKeyString, char partitionMethod,
 	{
 		case DISTRIBUTE_BY_APPEND:
 		case DISTRIBUTE_BY_RANGE:
-        case DISTRIBUTE_BY_MDTILING:
+		case DISTRIBUTE_BY_MDTILING:
 		{
 			Node *partitionNode = stringToNode(partitionKeyString);
 			Var *partitionColumn = (Var *) partitionNode;

@@ -22,9 +22,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <liblwgeom.h>
 
 #include "catalog/namespace.h"
 #include "catalog/pg_class.h"
+#include "executor/spi.h"
 #include "distributed/listutils.h"
 #include "distributed/metadata_utility.h"
 #include "distributed/coordinator_protocol.h"
@@ -51,7 +53,12 @@
 #include "utils/errcodes.h"
 #include "utils/lsyscache.h"
 #include "utils/palloc.h"
+#include "distributed/postgis.h"
 
+
+/* Local functions forward declarations */
+static GBOX * TableExtent(Oid relationId);
+static GBOX ** spatialPartitioning(Oid relationId, int32 shardCount, GBOX *tableExtent);
 
 /* declarations for dynamic loading */
 PG_FUNCTION_INFO_V1(master_create_worker_shards);
@@ -326,45 +333,32 @@ CreateShardsWithSpatiotemporalMethod(Oid distributedTableId, int32 shardCount,
 	/* set shard storage type according to relation type */
 	char shardStorageType = ShardStorageType(distributedTableId);
 
-	/* Get the spatiotemporal extent */
+	/* Get the spatial extent */
+    GBOX *extent= TableExtent(distributedTableId);
+    /* Apply a spatial data partitioning function to generate the table shards.
+     * The data that is close to each other will be stored together in the same shard
+     */
+    GBOX **shardsExtent = spatialPartitioning(distributedTableId, shardCount, extent);
 
-
-
-
-	for (int64 shardIndex = 0; shardIndex < shardCount; shardIndex++)
-	{
-		uint32 roundRobinNodeIndex = shardIndex % workerNodeCount;
-
-		/* initialize the hash token space for this shard */
-		int32 shardMinHashToken = PG_INT32_MIN + (shardIndex * hashTokenIncrement);
-		int32 shardMaxHashToken = shardMinHashToken + (hashTokenIncrement - 1);
-		uint64 shardId = GetNextShardId();
-
-		/* if we are at the last shard, make sure the max token value is INT_MAX */
-		if (shardIndex == (shardCount - 1))
-		{
-			shardMaxHashToken = PG_INT32_MAX;
-		}
-
-		/* insert the shard metadata row along with its min/max values */
-		text *minHashTokenText = IntegerToText(shardMinHashToken);
-		text *maxHashTokenText = IntegerToText(shardMaxHashToken);
-
-		InsertShardRow(distributedTableId, shardId, shardStorageType,
-					   minHashTokenText, maxHashTokenText);
-
-		List *currentInsertedShardPlacements = InsertShardPlacementRows(
-				distributedTableId,
-				shardId,
-				workerNodeList,
-				roundRobinNodeIndex,
-				replicationFactor);
-		insertedShardPlacements = list_concat(insertedShardPlacements,
-											  currentInsertedShardPlacements);
+    /* Insert the spatial bounding box for every shard */
+    for (int64 shardIndex = 0; shardIndex < shardCount; shardIndex++)
+    {
+		InsertShardExtent(distributedTableId, shardIndex + 1, shardStorageType, shardsExtent[shardIndex]);
+        List *currentInsertedShardPlacements = InsertShardPlacementRows(
+                distributedTableId,
+                shardIndex + 1,
+                workerNodeList,
+                shardIndex,
+                replicationFactor);
+        insertedShardPlacements = list_concat(insertedShardPlacements,
+                                              currentInsertedShardPlacements);
 	}
 
-	CreateShardsOnWorkers(distributedTableId, insertedShardPlacements,
-						  useExclusiveConnections, colocatedShard);
+
+    /* Transfer the data into partitions */
+	/*CreateShardsOnWorkers(distributedTableId, insertedShardPlacements,
+                          useExclusiveConnections, colocatedShard);*/
+    ereport(WARNING, (errmsg("Function:TableExtent:(%d) ",  (uint32)extent->xmax)));
 }
 /*
  * CreateColocatedShards creates shards for the target relation colocated with
@@ -547,4 +541,72 @@ IntegerToText(int32 value)
 	text *valueText = cstring_to_text(valueString->data);
 
 	return valueText;
+}
+
+/* Helper function to convert GBOX value to a text type */
+text *
+GBOXToText(GBOX *bbox)
+{
+    StringInfo valueString = makeStringInfo();
+    appendStringInfo(valueString, "BOX((%.8g,%.8g),(%.8g,%.8g))", bbox->xmin, bbox->ymin, bbox->xmax, bbox->ymax);
+
+    text *valueText = cstring_to_text(valueString->data);
+
+    return valueText;
+}
+
+/* TableExtent gets the spatial extent of a table which results in a GBOX type that consists of four dimensions */
+GBOX *
+TableExtent(Oid relationId)
+{
+	GBOX *result = palloc0(sizeof(GBOX));
+    bool        isnull;
+    MemoryContext upperContext, oldContext = NULL;
+    int spiResult = SPI_connect();
+
+    if (spiResult != SPI_OK_CONNECT)
+    {
+        ereport(ERROR, (errmsg("could not connect to SPI manager")));
+    }
+
+    spiResult = SPI_exec("SELECT st_extent(geom) FROM geoms_org", 0);
+    if (spiResult != SPI_OK_SELECT)
+    {
+        ereport(ERROR, (errmsg("could not get the table extent")));
+    }
+    oldContext = MemoryContextSwitchTo(upperContext);
+    result = SPI_getbinval(SPI_tuptable->vals[0],
+                                    SPI_tuptable->tupdesc,
+                                    1,
+                                    &isnull);
+
+    SPI_finish();
+    SPI_freetuptable(SPI_tuptable);
+    MemoryContextSwitchTo(oldContext);
+	return result;
+}
+
+/* spatialPartitioning partition the whole extent spatially into a set of shards */
+GBOX **
+spatialPartitioning(Oid relationId, int32 shardCount, GBOX *tableExtent)
+{
+	GBOX **shardsExtent = palloc(sizeof(GBOX *) * shardCount);
+
+	/* Generate the spatial bounding box for every shard according to the spatial partitioning method and the number of
+     * available shards
+     */
+	float xmin, xmax, ymin, ymax; //TODO: create a function to generate the shards extents based on the parttitioning method
+	int shard_index = 0;
+	for(int i = 0; i < shardCount; i++)
+	{
+	    shardsExtent[shard_index] = palloc0(sizeof(GBOX));
+        shardsExtent[shard_index]->xmin = 0;
+        shardsExtent[shard_index]->xmax = 0;
+        shardsExtent[shard_index]->ymin = 0;
+        shardsExtent[shard_index]->ymax = 0;
+        shardsExtent[shard_index]->zmin = 0;
+        shardsExtent[shard_index]->zmax = 0;
+        shard_index++;
+	}
+	return shardsExtent;
 }

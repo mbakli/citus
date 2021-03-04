@@ -314,6 +314,7 @@ List *
 PruneShards(Oid relationId, Index rangeTableId, List *whereClauseList,
 			Const **partitionValueConst)
 {
+	ereport(WARNING, (errmsg("Function:PruneShards")));
 	CitusTableCacheEntry *cacheEntry = GetCitusTableCacheEntry(relationId);
 	int shardCount = cacheEntry->shardIntervalArrayLength;
 	char partitionMethod = cacheEntry->partitionMethod;
