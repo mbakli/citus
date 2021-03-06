@@ -518,6 +518,7 @@ void
 CreateShardsOnWorkers(Oid distributedRelationId, List *shardPlacements,
 					  bool useExclusiveConnection, bool colocatedShard)
 {
+    ereport(WARNING, (errmsg("Function:CreateShardsOnWorkers ")));
 	bool includeSequenceDefaults = false;
 	List *ddlCommandList = GetFullTableCreationCommands(distributedRelationId,
 														includeSequenceDefaults);

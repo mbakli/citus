@@ -251,8 +251,10 @@ create_spatiotemporal_distributed_table(PG_FUNCTION_ARGS)
 	Oid relationId = PG_GETARG_OID(0);
 	text *distributionColumnText = PG_GETARG_TEXT_P(1);
 	Oid distributionMethodOid = PG_GETARG_OID(2);
-	text *extentText = PG_GETARG_TEXT_P(3);
-    text *colocateWithTableNameText = PG_GETARG_TEXT_P(4);
+    text *packingAlgorithmText = PG_GETARG_TEXT_P(3); // TODO: Not yet developed, I only use a simple way for testing
+	bool spatial = PG_GETARG_BOOL(4);
+	bool temporal = PG_GETARG_BOOL(5);
+    text *colocateWithTableNameText = PG_GETARG_TEXT_P(6);
 
 	CheckCitusVersion(ERROR);
 

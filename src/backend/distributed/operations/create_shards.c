@@ -58,7 +58,7 @@
 
 /* Local functions forward declarations */
 static GBOX * TableExtent(Oid relationId);
-static GBOX ** spatialPartitioning(Oid relationId, int32 shardCount, GBOX *tableExtent);
+static GBOX ** spatiotemporalPartitioning(Oid relationId, int32 shardCount, GBOX *tableExtent);
 
 /* declarations for dynamic loading */
 PG_FUNCTION_INFO_V1(master_create_worker_shards);
@@ -338,7 +338,7 @@ CreateShardsWithSpatiotemporalMethod(Oid distributedTableId, int32 shardCount,
     /* Apply a spatial data partitioning function to generate the table shards.
      * The data that is close to each other will be stored together in the same shard
      */
-    GBOX **shardsExtent = spatialPartitioning(distributedTableId, shardCount, extent);
+    GBOX **shardsExtent = spatiotemporalPartitioning(distributedTableId, shardCount, extent);
 
     /* Insert the spatial bounding box for every shard */
     for (int64 shardIndex = 0; shardIndex < shardCount; shardIndex++)
@@ -356,9 +356,8 @@ CreateShardsWithSpatiotemporalMethod(Oid distributedTableId, int32 shardCount,
 
 
     /* Transfer the data into partitions */
-	/*CreateShardsOnWorkers(distributedTableId, insertedShardPlacements,
-                          useExclusiveConnections, colocatedShard);*/
-    ereport(WARNING, (errmsg("Function:TableExtent:(%d) ",  (uint32)extent->xmax)));
+	CreateShardsOnWorkers(distributedTableId, insertedShardPlacements,
+                          useExclusiveConnections, colocatedShard);
 }
 /*
  * CreateColocatedShards creates shards for the target relation colocated with
@@ -586,27 +585,51 @@ TableExtent(Oid relationId)
 	return result;
 }
 
-/* spatialPartitioning partition the whole extent spatially into a set of shards */
+/* spatiotemporalPartitioning partition the whole extent spatially into a set of shards */
 GBOX **
-spatialPartitioning(Oid relationId, int32 shardCount, GBOX *tableExtent)
+spatiotemporalPartitioning(Oid relationId, int32 shardCount, GBOX *tableExtent)
 {
 	GBOX **shardsExtent = palloc(sizeof(GBOX *) * shardCount);
 
 	/* Generate the spatial bounding box for every shard according to the spatial partitioning method and the number of
      * available shards
      */
-	float xmin, xmax, ymin, ymax; //TODO: create a function to generate the shards extents based on the parttitioning method
+	double start_x, start_y, end_x, end_y, step_x, step_y;
 	int shard_index = 0;
-	for(int i = 0; i < shardCount; i++)
+	int root = sqrt(shardCount);
+    int i, j;
+
+    for(i = root; i >= 1; i--)
+    {
+        if(shardCount % i == 0)
+            break;
+    }
+	int x_numdim = (int) fmax(i, shardCount / i);
+	int y_numdim = (int) fmin (i, shardCount / i);
+    ereport(WARNING, (errmsg("Dimensions:(X=(%d)), Y(=(%d)) ", x_numdim, y_numdim)));
+	start_x = tableExtent->xmin;
+	start_y = tableExtent->ymin;
+	step_x = (tableExtent->xmax - tableExtent->xmin) / x_numdim;
+    step_y = (tableExtent->ymax - tableExtent->ymin) / y_numdim;
+
+    for(i = 0; i < x_numdim; i++)
 	{
-	    shardsExtent[shard_index] = palloc0(sizeof(GBOX));
-        shardsExtent[shard_index]->xmin = 0;
-        shardsExtent[shard_index]->xmax = 0;
-        shardsExtent[shard_index]->ymin = 0;
-        shardsExtent[shard_index]->ymax = 0;
-        shardsExtent[shard_index]->zmin = 0;
-        shardsExtent[shard_index]->zmax = 0;
-        shard_index++;
+	    end_x = start_x + step_x;
+	    for (j = 0; j < y_numdim; j++)
+        {
+            end_y = start_y + step_y;
+            shardsExtent[shard_index] = palloc0(sizeof(GBOX));
+            shardsExtent[shard_index]->xmin = start_x;
+            shardsExtent[shard_index]->xmax = end_x;
+            shardsExtent[shard_index]->ymin = start_y;
+            shardsExtent[shard_index]->ymax = end_y;
+            shardsExtent[shard_index]->zmin = 0;
+            shardsExtent[shard_index]->zmax = 0;
+            shard_index++;
+            start_y = end_y;
+        }
+        start_x = end_x;
+	    start_y = tableExtent->ymin;
 	}
 	return shardsExtent;
 }

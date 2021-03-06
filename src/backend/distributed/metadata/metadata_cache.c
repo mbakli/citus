@@ -1291,6 +1291,7 @@ BuildCitusTableCacheEntry(Oid relationId)
 	/* we only need overlapping functions for MD tiling distributed tables */
 	else if (cacheEntry->partitionMethod == DISTRIBUTE_BY_MDTILING)
 	{
+		ereport(WARNING, (errmsg("Function:BuildCitusTableCacheEntry")));
         cacheEntry->hashFunction = NULL;//TODO: Add the overlapping function
 	}
 	else
